@@ -2,79 +2,86 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"os"
-	"path"
-	"strconv"
 	"time"
 
 	flags "github.com/jessevdk/go-flags"
+	"github.com/lestrrat-go/slack"
 	redmine "github.com/mattn/go-redmine"
 )
 
 type options struct {
-	RedmineEndpoint string `short:"r" long:"redmine" env:"REDMINE_URL" required:"true" description:"URL of your redmine"`
-	RedmineAPIKey   string `short:"k" long:"apikey" env:"REDMINE_APIKEY" required:"true" description:"apikey to use redmine API"`
-	ProjectID       string `short:"p" long:"project" env:"REDMINE_PROJECT" required:"true" description:"project id to summary"`
+	Redmine redmineOptions
+	Slack   slackOptions
 }
 
-const timeFmt = "2006-01-02"
+type redmineOptions struct {
+	APIKey    string `short:"k" long:"redmine-apikey" env:"REDMINE_APIKEY" required:"true" description:"APIKey for your Redmine"`
+	ProjectID string `short:"p" long:"redmine-projectid" env:"REDMINE_PROJECTID" required:"true" description:"Project ID you want to summarize"`
+	Endpoint  string `short:"r" long:"redmine-endpoint" env:"REDMINE_ENDPOINT" requireid:"true" description:"Endpoint URL of your Redmine"`
+}
 
-var (
-	now         = time.Now()
-	weekend     = now.Add(time.Duration(time.Friday-now.Weekday()) * 24 * time.Hour)
-	usermapping = loadUserMapping()
-)
+type slackOptions struct {
+	Token   string `short:"t" long:"slack-token" env:"SLACK_TOKEN" required:"true" description:"Slack API Token"`
+	Channel string `short:"c" long:"slack-channel" env:"SLACK_CHANNEL" default:"#general" description:"Slack channel you want to post"`
+}
 
 type issue struct {
-	ID           string
-	Subject      string
-	DueDate      string
-	AssignedUser string
-	Ref          string
+	ID         int
+	Subject    string
+	DueDate    time.Time
+	AssignedTo *redmine.IdName
 }
 
-func convert(cli *redmine.Client, rissue redmine.Issue, endpoint string) issue {
-	return issue{
-		ID:           strconv.Itoa(rissue.Id),
-		Subject:      rissue.Subject,
-		DueDate:      rissue.DueDate,
-		AssignedUser: rmID2slID(cli, rissue.AssignedTo),
-		Ref:          path.Join(endpoint, "issues", strconv.Itoa(rissue.Id)),
+var (
+	now     = time.Now()
+	today   = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
+	weekend = today.Add(time.Duration(5-today.Weekday()) * time.Hour * 24)
+)
+
+var userMap = loadUserMap()
+
+func main() { os.Exit(_main()) }
+
+func _main() int {
+	if err := exec(); err != nil {
+		log.Print(err)
+		return 1
 	}
+	return 0
 }
 
-func (i issue) String() string {
-	return fmt.Sprintf("%s <%s|%s>: %s(@%s)", i.DueDate, i.Ref, i.ID, i.Subject, i.AssignedUser)
-}
-
-func rmID2slID(cli *redmine.Client, idname *redmine.IdName) string {
-	if uid, ok := usermapping[strconv.Itoa(idname.Id)]; ok {
-		return uid
-	}
-	u, err := cli.User(idname.Id)
-	if err != nil {
-		if uid, ok := usermapping[idname.Name]; ok {
-			return uid
+func exec() error {
+	var opts options
+	if _, err := flags.Parse(&opts); err != nil {
+		if fe, ok := err.(*flags.Error); ok && fe.Type == flags.ErrHelp {
+			return nil
 		}
-		return idname.Name
+		return err
 	}
-	if uid, ok := usermapping[u.Login]; ok {
-		return uid
+
+	iss, err := getIssues(opts.Redmine)
+	if err != nil {
+		return err
 	}
-	return u.Login
+	expired := make(chan issue, 1)
+	near := make(chan issue, 1)
+	go collect(expired, iss, isExpired)
+	go collect(near, iss, isNear)
+
+	return postToSlack(opts, expired, near)
 }
 
-func loadUserMapping() map[string]string {
-	f, err := os.Open("usermapping.json")
+func loadUserMap() map[string]string {
+	f, err := os.Open("./usermapping.json")
 	if err != nil {
 		return map[string]string{}
 	}
 	defer f.Close()
-
 	m := map[string]string{}
 	if err := json.NewDecoder(f).Decode(&m); err != nil {
 		return map[string]string{}
@@ -82,72 +89,99 @@ func loadUserMapping() map[string]string {
 	return m
 }
 
-func main() {
-	if err := exec(); err != nil {
-		log.Print(err)
-		os.Exit(1)
-	}
-	os.Exit(0)
-}
-
-func exec() error {
-	var opts options
-	if _, err := flags.Parse(&opts); err != nil {
-		return err
-	}
-
-	cli := redmine.NewClient(opts.RedmineEndpoint, opts.RedmineAPIKey)
-	f := redmine.IssueFilter{ProjectId: opts.ProjectID}
-
-	issues, err := cli.IssuesByFilter(&f)
+func getIssues(opts redmineOptions) ([]issue, error) {
+	cli := redmine.NewClient(opts.Endpoint, opts.APIKey)
+	ris, err := cli.IssuesByFilter(&redmine.IssueFilter{ProjectId: opts.ProjectID})
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	expiredChan := make(chan issue, 1)
-	go collect(expiredChan, cli, opts.RedmineEndpoint, issues, isExpired)
-	nearChan := make(chan issue, 1)
-	go collect(nearChan, cli, opts.RedmineEndpoint, issues, isNear)
-
-	fprintIssues(os.Stdout, "expired", expiredChan)
-	fprintIssues(os.Stdout, "near", nearChan)
-	return nil
+	return convertIssues(ris), nil
 }
 
-func collect(ch chan issue, cli *redmine.Client, endpoint string, issues []redmine.Issue, filterFn func(redmine.Issue) bool) {
-	for _, i := range issues {
-		if filterFn(i) {
-			ch <- convert(cli, i, endpoint)
+func convertIssues(ris []redmine.Issue) []issue {
+	var is []issue
+	for _, ri := range ris {
+		due, _ := time.Parse("2006-01-02", ri.DueDate)
+		is = append(is, issue{
+			ID:         ri.Id,
+			Subject:    ri.Subject,
+			DueDate:    due,
+			AssignedTo: ri.AssignedTo,
+		})
+	}
+	return is
+}
+
+func collect(ch chan issue, iss []issue, filter func(issue) bool) {
+	for _, is := range iss {
+		if filter(is) {
+			ch <- is
 		}
 	}
 	close(ch)
 }
 
-func isExpired(i redmine.Issue) bool {
-	due, err := time.ParseInLocation(timeFmt, i.DueDate, time.Local)
-	if err != nil {
-		return false
-	}
-	return now.After(due)
+func isExpired(is issue) bool {
+	return today. /*Is*/ After(is.DueDate)
 }
 
-func isNear(i redmine.Issue) bool {
-	due, err := time.ParseInLocation(timeFmt, i.DueDate, time.Local)
-	if err != nil {
-		return false
-	}
-	d := due.Sub(weekend) / 24
-	days := (d.Minutes() - d.Hours()) / 60
-	return days < 7
+func isNear(is issue) bool {
+	return !isExpired(is) && weekend. /*Is*/ After(is.DueDate)
 }
 
-func fprintIssues(out io.Writer, label string, issCh chan issue) {
-	c := 0
+func postToSlack(opts options, expiredCh, nearCh chan issue) error {
+	cli := slack.New(opts.Slack.Token)
+	if _, err := cli.Auth().Test().Do(context.Background()); err != nil {
+		return err
+	}
+	var out bytes.Buffer
 	var buf bytes.Buffer
-	for i := range issCh {
-		fmt.Fprintln(&buf, i.String())
-		c++
+	var ec int
+	for is := range expiredCh {
+		ec++
+		fmt.Fprintf(&buf, "- %s <%s|#%d>: %s(<%s>)\n", is.DueDate.Format("2006-01-02"), opts.Redmine.Endpoint, is.ID, is.Subject, getUser(opts, is.AssignedTo))
 	}
-	fmt.Fprintf(out, "%s: %d\n", label, c)
-	fmt.Fprint(out, buf.String())
+	fmt.Fprintf(&out, "期限切れのチケットは%d件です\n", ec)
+	buf.WriteTo(&out)
+	buf.Reset()
+	var nc int
+	for is := range nearCh {
+		nc++
+		fmt.Fprintf(&buf, "- %s\n", is.DueDate.Format("2006-01-02"))
+	}
+	fmt.Fprintf(&out, "期限切れが近いチケットは%d件です\n", nc)
+	buf.WriteTo(&out)
+	if _, err := cli.Chat().PostMessage(opts.Slack.Channel).LinkNames(true).Text(out.String()).Do(context.Background()); err != nil {
+		return err
+	}
+	return nil
+}
+
+func getUser(opts options, idname *redmine.IdName) string {
+	r := redmine.NewClient(opts.Redmine.Endpoint, opts.Redmine.APIKey)
+	id := idname.Name
+	if i, ok := userMap[idname.Name]; ok {
+		id = i
+	}
+	ru, err := r.User(idname.Id)
+	if err != nil {
+		if id == "channel" {
+			return "!" + id
+		}
+		return id
+	}
+	if login, ok := userMap[ru.Login]; ok {
+		ru.Login = login
+	}
+	s := slack.New(opts.Slack.Token)
+	sul, err := s.Users().List().Do(context.Background())
+	if err != nil {
+		return ru.Login
+	}
+	for _, su := range sul {
+		if su.Name == ru.Login {
+			return "@" + su.ID
+		}
+	}
+	return ru.Login
 }
