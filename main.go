@@ -141,7 +141,7 @@ func postToSlack(opts options, expiredCh, nearCh chan issue) error {
 		ec++
 		fmt.Fprintf(&buf, "- %s <%s|#%d>: %s(<%s>)\n", is.DueDate.Format("2006-01-02"), opts.Redmine.Endpoint, is.ID, is.Subject, getUser(opts, is.AssignedTo))
 	}
-	fmt.Fprintf(&out, "期限切れのチケットは*%d件*です\n", ec)
+	fmt.Fprintf(&out, "期限切れのチケットは *%d件* です\n", ec)
 	buf.WriteTo(&out)
 	buf.Reset()
 	var nc int
@@ -149,7 +149,7 @@ func postToSlack(opts options, expiredCh, nearCh chan issue) error {
 		nc++
 		fmt.Fprintf(&buf, "- %s <%s|#%d>: %s(<%s>)\n", is.DueDate.Format("2006-01-02"), opts.Redmine.Endpoint, is.ID, is.Subject, getUser(opts, is.AssignedTo))
 	}
-	fmt.Fprintf(&out, "期限切れが近いチケットは*%d件*です\n", nc)
+	fmt.Fprintf(&out, "期限切れが近いチケットは *%d件* です\n", nc)
 	buf.WriteTo(&out)
 	if _, err := cli.Chat().PostMessage(opts.Slack.Channel).LinkNames(true).Text(out.String()).Do(context.Background()); err != nil {
 		return err
