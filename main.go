@@ -139,7 +139,7 @@ func postToSlack(opts options, expiredCh, nearCh chan issue) error {
 	var ec int
 	for is := range expiredCh {
 		ec++
-		fmt.Fprintf(&buf, "- %s <%s|#%d>: %s(<%s>)\n", is.DueDate.Format("2006-01-02"), opts.Redmine.Endpoint, is.ID, is.Subject, getUser(opts, is.AssignedTo))
+		fmt.Fprintf(&buf, "- %s <%s/issues/%d|#%d>: %s(<%s>)\n", is.DueDate.Format("2006-01-02"), opts.Redmine.Endpoint, is.ID, is.ID, is.Subject, getUser(opts, is.AssignedTo))
 	}
 	fmt.Fprintf(&out, "期限切れのチケットは *%d件* です\n", ec)
 	buf.WriteTo(&out)
@@ -147,7 +147,7 @@ func postToSlack(opts options, expiredCh, nearCh chan issue) error {
 	var nc int
 	for is := range nearCh {
 		nc++
-		fmt.Fprintf(&buf, "- %s <%s|#%d>: %s(<%s>)\n", is.DueDate.Format("2006-01-02"), opts.Redmine.Endpoint, is.ID, is.Subject, getUser(opts, is.AssignedTo))
+		fmt.Fprintf(&buf, "- %s <%s/issues/%d|#%d>: %s(<%s>)\n", is.DueDate.Format("2006-01-02"), opts.Redmine.Endpoint, is.ID, is.ID, is.Subject, getUser(opts, is.AssignedTo))
 	}
 	fmt.Fprintf(&out, "期限切れが近いチケットは *%d件* です\n", nc)
 	buf.WriteTo(&out)
