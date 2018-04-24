@@ -140,7 +140,7 @@ func postToSlack(opts options, expiredCh, nearCh chan issue) error {
 	for is := range expiredCh {
 		ec++
 		fmt.Print(is.DueDate)
-		fmt.Fprintf(&buf, "- %s <%s/issues/%d|#%d>: %s(%s)\n", formatTime(is.DueDate), opts.Redmine.Endpoint, is.ID, is.ID, is.Subject, getUser(opts, is.AssignedTo))
+		fmt.Fprintf(&buf, "- %s <%s/issues/%d|#%d>: %s(%s)\n", unassignable(formatTime(is.DueDate), "期日"), opts.Redmine.Endpoint, is.ID, is.ID, is.Subject, unassignable(getUser(opts, is.AssignedTo), "担当"))
 	}
 	fmt.Fprintf(&out, "期限切れのチケットは *%d件* です\n", ec)
 	buf.WriteTo(&out)
@@ -148,7 +148,7 @@ func postToSlack(opts options, expiredCh, nearCh chan issue) error {
 	var nc int
 	for is := range nearCh {
 		nc++
-		fmt.Fprintf(&buf, "- %s <%s/issues/%d|#%d>: %s(%s)\n", formatTime(is.DueDate), opts.Redmine.Endpoint, is.ID, is.ID, is.Subject, getUser(opts, is.AssignedTo))
+		fmt.Fprintf(&buf, "- %s <%s/issues/%d|#%d>: %s(%s)\n", unassignable(formatTime(is.DueDate), "期日"), opts.Redmine.Endpoint, is.ID, is.ID, is.Subject, unassignable(getUser(opts, is.AssignedTo), "担当"))
 	}
 	fmt.Fprintf(&out, "期限切れが近いチケットは *%d件* です\n", nc)
 	buf.WriteTo(&out)
@@ -158,9 +158,16 @@ func postToSlack(opts options, expiredCh, nearCh chan issue) error {
 	return nil
 }
 
+func unassignable(target, label string) string {
+	if target == "" {
+		return fmt.Sprintf("%s未設定", label)
+	}
+	return target
+}
+
 func getUser(opts options, idname *redmine.IdName) string {
 	if idname == nil {
-		return "担当未設定"
+		return ""
 	}
 	r := redmine.NewClient(opts.Redmine.Endpoint, opts.Redmine.APIKey)
 	id := idname.Name
@@ -193,7 +200,7 @@ func getUser(opts options, idname *redmine.IdName) string {
 func formatTime(t time.Time) string {
 	s := t.Format("2006-01-02")
 	if s == "0001-01-01" {
-		return "期限未設定"
+		return ""
 	}
 	return s
 }
