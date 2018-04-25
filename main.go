@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	flags "github.com/jessevdk/go-flags"
 	"github.com/lestrrat-go/slack"
+	"github.com/lestrrat-go/slack/objects"
 	redmine "github.com/mattn/go-redmine"
 )
 
@@ -169,32 +171,44 @@ func getUser(opts options, idname *redmine.IdName) string {
 	if idname == nil {
 		return ""
 	}
-	r := redmine.NewClient(opts.Redmine.Endpoint, opts.Redmine.APIKey)
-	id := idname.Name
-	if i, ok := userMap[idname.Name]; ok {
-		id = i
-	}
-	ru, err := r.User(idname.Id)
+	redmineClient := redmine.NewClient(opts.Redmine.Endpoint, opts.Redmine.APIKey)
+	redmineUser, err := redmineClient.User(idname.Id)
 	if err != nil {
-		if id == "channel" {
-			return "<!" + id + ">"
-		}
-		return id
+		return idname.Name
 	}
-	if login, ok := userMap[ru.Login]; ok {
-		ru.Login = login
-	}
-	s := slack.New(opts.Slack.Token)
-	sul, err := s.Users().List().Do(context.Background())
+	slackRESTClient := slack.New(opts.Slack.Token)
+	slackUserList, err := slackRESTClient.Users().List().Do(context.Background())
 	if err != nil {
-		return ru.Login
+		return idname.Name
 	}
-	for _, su := range sul {
-		if su.Name == ru.Login {
-			return "<@" + su.ID + ">"
+	for _, slackUser := range slackUserList {
+		if isSameUser(*redmineUser, *slackUser) {
+			return "<@" + slackUser.ID + ">"
 		}
 	}
-	return ru.Login
+
+	return idname.Name
+}
+
+func isSameUser(redmineUser redmine.User, slackUser objects.User) bool {
+	realName := strings.Replace(slackUser.RealName, "　", " ", -1)
+	if redmineUser.Login == slackUser.Name {
+		return true
+	}
+	switch realName {
+	case
+		redmineUser.Lastname + redmineUser.Firstname,
+		redmineUser.Lastname + " " + redmineUser.Firstname,
+		redmineUser.Firstname + redmineUser.Lastname,
+		redmineUser.Firstname + " " + redmineUser.Lastname:
+
+		return true
+	}
+	if mappedName, ok := userMap[slackUser.RealName]; ok {
+		slackUser.RealName = mappedName
+		return isSameUser(redmineUser, slackUser)
+	}
+	return false
 }
 
 func formatTime(t time.Time) string {
