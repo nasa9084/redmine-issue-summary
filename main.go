@@ -39,6 +39,11 @@ type issue struct {
 	AssignedTo *redmine.IdName
 }
 
+const (
+	// maxLimit is maximum Limit for Redmine's issue API.
+	maxLimit = 100
+)
+
 var (
 	now     = time.Now()
 	today   = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
@@ -93,9 +98,22 @@ func loadUserMap() map[string]string {
 
 func getIssues(opts redmineOptions) ([]issue, error) {
 	cli := redmine.NewClient(opts.Endpoint, opts.APIKey)
-	ris, err := cli.IssuesByFilter(&redmine.IssueFilter{ProjectId: opts.ProjectID})
-	if err != nil {
-		return nil, err
+	cli.Limit = maxLimit
+	cli.Offset = 0 // initialize offset (default is -1)
+	ris := []redmine.Issue{}
+	filter := &redmine.IssueFilter{ProjectId: opts.ProjectID}
+
+	// redmine's issues API returns 100 issues at a maximum.
+	for {
+		res, err := cli.IssuesByFilter(filter)
+		if err != nil {
+			return nil, err
+		}
+		if len(res) == 0 { // no more issues
+			break
+		}
+		ris = append(ris, res...)
+		cli.Offset += maxLimit
 	}
 	return convertIssues(ris), nil
 }
