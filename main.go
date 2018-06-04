@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -112,6 +113,8 @@ func getIssues(opts redmineOptions) ([]issue, error) {
 		log.Printf("got %d - %d: %d", cli.Offset, cli.Offset+cli.Limit, len(res))
 		if len(res) == 0 { // no more issues
 			break
+		} else if len(res) > cli.Limit {
+			return nil, errors.New("over limit: something is wrong")
 		}
 		ris = append(ris, res...)
 		cli.Offset += maxLimit
