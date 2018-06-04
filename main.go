@@ -118,6 +118,7 @@ func getIssues(opts redmineOptions) ([]issue, error) {
 		ris = append(ris, res...)
 		cli.Offset += maxLimit
 	}
+	log.Printf("issues: %d", len(ris))
 	return convertIssues(ris), nil
 }
 
