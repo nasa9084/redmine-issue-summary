@@ -22,9 +22,8 @@ type options struct {
 }
 
 type redmineOptions struct {
-	APIKey    string `short:"k" long:"redmine-apikey" env:"REDMINE_APIKEY" required:"true" description:"APIKey for your Redmine"`
-	ProjectID string `short:"p" long:"redmine-projectid" env:"REDMINE_PROJECTID" required:"true" description:"Project ID you want to summarize"`
-	Endpoint  string `short:"r" long:"redmine-endpoint" env:"REDMINE_ENDPOINT" requireid:"true" description:"Endpoint URL of your Redmine"`
+	APIKey   string `short:"k" long:"redmine-apikey" env:"REDMINE_APIKEY" required:"true" description:"APIKey for your Redmine"`
+	Endpoint string `short:"r" long:"redmine-endpoint" env:"REDMINE_ENDPOINT" requireid:"true" description:"Endpoint URL of your Redmine"`
 }
 
 type slackOptions struct {
@@ -70,7 +69,6 @@ func exec() error {
 		}
 		return err
 	}
-
 	iss, err := getIssues(opts.Redmine)
 	if err != nil {
 		return err
@@ -101,11 +99,10 @@ func getIssues(opts redmineOptions) ([]issue, error) {
 	cli.Limit = maxLimit
 	cli.Offset = 0 // initialize offset (default is -1)
 	ris := []redmine.Issue{}
-	filter := &redmine.IssueFilter{ProjectId: opts.ProjectID}
 
 	// redmine's issues API returns 100 issues at a maximum.
 	for {
-		res, err := cli.IssuesByFilter(filter)
+		res, err := cli.Issues()
 		if err != nil {
 			return nil, err
 		}
@@ -159,7 +156,6 @@ func postToSlack(opts options, expiredCh, nearCh chan issue) error {
 	var ec int
 	for is := range expiredCh {
 		ec++
-		fmt.Print(is.DueDate)
 		fmt.Fprintf(&buf, "- %s <%s/issues/%d|#%d>: %s(%s)\n", unassignable(formatTime(is.DueDate), "期日"), opts.Redmine.Endpoint, is.ID, is.ID, is.Subject, unassignable(getUser(opts, is.AssignedTo), "担当"))
 	}
 	fmt.Fprintf(&out, "期限切れのチケットは *%d件* です\n", ec)
