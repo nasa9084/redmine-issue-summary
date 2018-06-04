@@ -62,6 +62,7 @@ func _main() int {
 }
 
 func exec() error {
+	log.Print("parse flags")
 	var opts options
 	if _, err := flags.Parse(&opts); err != nil {
 		if fe, ok := err.(*flags.Error); ok && fe.Type == flags.ErrHelp {
@@ -75,6 +76,7 @@ func exec() error {
 	}
 	expired := make(chan issue, 1)
 	near := make(chan issue, 1)
+	log.Print("start to collect issues")
 	go collect(expired, iss, isExpired)
 	go collect(near, iss, isNear)
 
@@ -95,6 +97,7 @@ func loadUserMap() map[string]string {
 }
 
 func getIssues(opts redmineOptions) ([]issue, error) {
+	log.Print("getIssues")
 	cli := redmine.NewClient(opts.Endpoint, opts.APIKey)
 	cli.Limit = maxLimit
 	cli.Offset = 0 // initialize offset (default is -1)
@@ -116,6 +119,7 @@ func getIssues(opts redmineOptions) ([]issue, error) {
 }
 
 func convertIssues(ris []redmine.Issue) []issue {
+	log.Print("convertIssues")
 	var is []issue
 	for _, ri := range ris {
 		due, _ := time.Parse("2006-01-02", ri.DueDate)
@@ -136,6 +140,7 @@ func collect(ch chan issue, iss []issue, filter func(issue) bool) {
 		}
 	}
 	close(ch)
+	log.Print("finish collect issues")
 }
 
 func isExpired(is issue) bool {
@@ -168,6 +173,7 @@ func postToSlack(opts options, expiredCh, nearCh chan issue) error {
 	}
 	fmt.Fprintf(&out, "期限切れが近いチケットは *%d件* です\n", nc)
 	buf.WriteTo(&out)
+	log.Print("post to slack")
 	if _, err := cli.Chat().PostMessage(opts.Slack.Channel).LinkNames(true).Text(out.String()).Do(context.Background()); err != nil {
 		return err
 	}
