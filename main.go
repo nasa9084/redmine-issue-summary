@@ -112,11 +112,12 @@ func getIssues(opts redmineOptions) ([]issue, error) {
 		log.Printf("got %d - %d: %d", cli.Offset, cli.Offset+cli.Limit, len(res))
 		if len(res) == 0 { // no more issues
 			break
-		} else if len(res) > cli.Limit {
-			break
 		}
 		ris = append(ris, res...)
 		cli.Offset += maxLimit
+		if len(res) > cli.Limit {
+			break
+		}
 	}
 	log.Printf("issues: %d", len(ris))
 	return convertIssues(ris), nil
