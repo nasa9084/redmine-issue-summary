@@ -109,6 +109,7 @@ func getIssues(opts redmineOptions) ([]issue, error) {
 		if err != nil {
 			return nil, err
 		}
+		log.Printf("got %d", len(res))
 		if len(res) == 0 { // no more issues
 			break
 		}
