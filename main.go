@@ -74,13 +74,9 @@ func exec() error {
 	if err != nil {
 		return err
 	}
-	expired := make(chan issue, 1)
-	near := make(chan issue, 1)
-	log.Print("start to collect issues")
-	go collect(expired, iss, isExpired)
-	go collect(near, iss, isNear)
+	out := fanout(iss, isExpired, isNear)
 
-	return postToSlack(opts, expired, near)
+	return postToSlack(opts, out[0], out[1])
 }
 
 func loadUserMap() map[string]string {
@@ -138,16 +134,6 @@ func convertIssues(ris []redmine.Issue) []issue {
 	return is
 }
 
-func collect(ch chan issue, iss []issue, filter func(issue) bool) {
-	for _, is := range iss {
-		if filter(is) {
-			ch <- is
-		}
-	}
-	close(ch)
-	log.Print("finish collect issues")
-}
-
 func isExpired(is issue) bool {
 	return today. /*Is*/ After(is.DueDate)
 }
@@ -156,7 +142,7 @@ func isNear(is issue) bool {
 	return !isExpired(is) && weekend. /*Is*/ After(is.DueDate)
 }
 
-func postToSlack(opts options, expiredCh, nearCh chan issue) error {
+func postToSlack(opts options, expiredCh, nearCh <-chan issue) error {
 	cli := slack.New(opts.Slack.Token)
 	if _, err := cli.Auth().Test().Do(context.Background()); err != nil {
 		return err
@@ -242,4 +228,31 @@ func formatTime(t time.Time) string {
 		return ""
 	}
 	return s
+}
+
+func fanout(in []issue, filters ...func(issue) bool) []chan issue {
+	n := len(filters)
+	out := make([]chan issue, n)
+	for i := 0; i < n; i++ {
+		out[i] = make(chan issue, 1)
+	}
+
+	go func(in []issue, out []chan issue) {
+		defer func(out []chan issue) {
+			log.Print("fanout finished")
+			for _, c := range out {
+				close(c)
+			}
+		}(out)
+
+		for _, iss := range in {
+			for i := range out {
+				if filters[i](iss) {
+					out[i] <- iss
+				}
+			}
+		}
+	}(in, out)
+
+	return out
 }
