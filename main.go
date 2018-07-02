@@ -117,6 +117,7 @@ func initialize(opts options) error {
 		return err
 	}
 	redmineClient = redmine.NewClient(opts.Redmine.Endpoint, opts.Redmine.APIKey)
+	redmineClient.Limit = maxLimit
 	return loadRedmineUsers()
 }
 
