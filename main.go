@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	flags "github.com/jessevdk/go-flags"
@@ -38,6 +40,26 @@ type issue struct {
 	AssignedTo *redmine.IdName
 }
 
+type redmineUserMap struct {
+	m sync.Map
+}
+
+func (rum *redmineUserMap) Set(id int, user redmine.User) {
+	rum.m.Store(id, user)
+}
+
+func (rum *redmineUserMap) Get(id int) (redmine.User, error) {
+	ui, ok := rum.m.Load(id)
+	if !ok {
+		return redmine.User{}, errors.New("the user is not found")
+	}
+	u, ok := ui.(redmine.User)
+	if !ok {
+		return redmine.User{}, errors.New("cannot convert to *redmine.User")
+	}
+	return u, nil
+}
+
 const (
 	// maxLimit is maximum Limit for Redmine's issue API.
 	maxLimit = 100
@@ -49,7 +71,13 @@ var (
 	weekend = today.Add(time.Duration(5-today.Weekday()) * time.Hour * 24)
 )
 
-var userMap = loadUserMap()
+var (
+	userMap       = loadUserMap()
+	slackClient   *slack.Client
+	slackUsers    objects.UserList
+	redmineClient *redmine.Client
+	redmineUsers  redmineUserMap
+)
 
 func main() { os.Exit(_main()) }
 
@@ -70,6 +98,7 @@ func exec() error {
 		}
 		return err
 	}
+	initialize(opts)
 	iss, err := getIssues(opts.Redmine)
 	if err != nil {
 		return err
@@ -77,6 +106,12 @@ func exec() error {
 	out := fanout(iss, isExpired, isNear)
 
 	return postToSlack(opts, out[0], out[1])
+}
+
+func initialize(opts options) {
+	log.Print("initialize clients")
+	slackClient = slack.New(opts.Slack.Token)
+	redmineClient = redmine.NewClient(opts.Redmine.Endpoint, opts.Redmine.APIKey)
 }
 
 func loadUserMap() map[string]string {
@@ -90,6 +125,26 @@ func loadUserMap() map[string]string {
 		return map[string]string{}
 	}
 	return m
+}
+
+func loadRedmineUsers() error {
+	users, err := redmineClient.Users()
+	if err != nil {
+		return err
+	}
+	for _, user := range users {
+		redmineUsers.Set(user.Id, user)
+	}
+	return nil
+}
+
+func loadSlackUsers() error {
+	users, err := slackClient.Users().List().Do(context.Background())
+	if err != nil {
+		return err
+	}
+	slackUsers = users
+	return nil
 }
 
 func getIssues(opts redmineOptions) ([]issue, error) {
@@ -182,18 +237,12 @@ func getUser(opts options, idname *redmine.IdName) string {
 	if idname == nil {
 		return ""
 	}
-	redmineClient := redmine.NewClient(opts.Redmine.Endpoint, opts.Redmine.APIKey)
-	redmineUser, err := redmineClient.User(idname.Id)
+	redmineUser, err := redmineUsers.Get(idname.Id)
 	if err != nil {
 		return idname.Name
 	}
-	slackRESTClient := slack.New(opts.Slack.Token)
-	slackUserList, err := slackRESTClient.Users().List().Do(context.Background())
-	if err != nil {
-		return idname.Name
-	}
-	for _, slackUser := range slackUserList {
-		if isSameUser(*redmineUser, *slackUser) {
+	for _, slackUser := range slackUsers {
+		if isSameUser(redmineUser, *slackUser) {
 			return "<@" + slackUser.ID + ">"
 		}
 	}
