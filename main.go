@@ -283,7 +283,7 @@ func fanout(in []issue, filters ...func(issue) bool) []chan issue {
 	n := len(filters)
 	out := make([]chan issue, n)
 	for i := 0; i < n; i++ {
-		out[i] = make(chan issue, 1)
+		out[i] = make(chan issue, 10)
 	}
 
 	go func(in []issue, out []chan issue) {
