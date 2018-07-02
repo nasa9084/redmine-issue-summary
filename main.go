@@ -98,7 +98,9 @@ func exec() error {
 		}
 		return err
 	}
-	initialize(opts)
+	if err := initialize(opts); err != nil {
+		return err
+	}
 	iss, err := getIssues(opts.Redmine)
 	if err != nil {
 		return err
@@ -108,10 +110,14 @@ func exec() error {
 	return postToSlack(opts, out[0], out[1])
 }
 
-func initialize(opts options) {
+func initialize(opts options) error {
 	log.Print("initialize clients")
 	slackClient = slack.New(opts.Slack.Token)
+	if err := loadSlackUsers(); err != nil {
+		return err
+	}
 	redmineClient = redmine.NewClient(opts.Redmine.Endpoint, opts.Redmine.APIKey)
+	return loadRedmineUsers()
 }
 
 func loadUserMap() map[string]string {
