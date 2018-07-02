@@ -1,3 +1,9 @@
+/*
+Redmine-issue-summary is a weekly report slack bot which summarize redmine ticket statuses.
+There's a workaround:
+1. issue filtering by project id
+  * mattn/go-redmine 's Client.IssuesOf() causes exception on redmine_issues_tree plugin
+*/
 package main
 
 import (
@@ -8,6 +14,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +33,7 @@ type options struct {
 type redmineOptions struct {
 	APIKey   string `short:"k" long:"redmine-apikey" env:"REDMINE_APIKEY" required:"true" description:"APIKey for your Redmine"`
 	Endpoint string `short:"r" long:"redmine-endpoint" env:"REDMINE_ENDPOINT" requireid:"true" description:"Endpoint URL of your Redmine"`
+	Project  string `short:"p" long:"redmine-project" env:"REDMINE_PROJECT" required:"true" description:"Target project of Redmine"`
 }
 
 type slackOptions struct {
@@ -77,6 +85,7 @@ var (
 	slackUsers    objects.UserList
 	redmineClient *redmine.Client
 	redmineUsers  redmineUserMap
+	targetProject redmine.Project // workaround(1)
 )
 
 func main() { os.Exit(_main()) }
@@ -118,6 +127,11 @@ func initialize(opts options) error {
 	}
 	redmineClient = redmine.NewClient(opts.Redmine.Endpoint, opts.Redmine.APIKey)
 	redmineClient.Limit = maxLimit
+	var err error
+	targetProject, err = getProject(opts.Redmine.Project)
+	if err != nil {
+		return err
+	}
 	return loadRedmineUsers()
 }
 
@@ -157,34 +171,38 @@ func loadSlackUsers() error {
 func getIssues(opts redmineOptions) ([]issue, error) {
 	log.Print("getIssues")
 	cli := redmine.NewClient(opts.Endpoint, opts.APIKey)
-	cli.Limit = maxLimit
-	cli.Offset = 0 // initialize offset (default is -1)
-	ris := []redmine.Issue{}
 
-	// redmine's issues API returns 100 issues at a maximum.
-	for {
-		res, err := cli.Issues()
-		if err != nil {
-			return nil, err
-		}
-		log.Printf("got %d - %d: %d", cli.Offset, cli.Offset+cli.Limit, len(res))
-		if len(res) == 0 { // no more issues
-			break
-		}
-		ris = append(ris, res...)
-		cli.Offset += maxLimit
-		if len(res) > cli.Limit {
-			break
+	res, err := cli.Issues()
+	if err != nil {
+		return nil, err
+	}
+
+	log.Printf("issues: %d", len(res))
+	return convertIssues(res), nil
+}
+
+func getProject(target string) (redmine.Project, error) {
+	projects, err := redmineClient.Projects()
+	if err != nil {
+		return redmine.Project{}, err
+	}
+	for _, project := range projects {
+		if strconv.Itoa(project.Id) == target || project.Name == target {
+			return project, nil
 		}
 	}
-	log.Printf("issues: %d", len(ris))
-	return convertIssues(ris), nil
+	return redmine.Project{}, errors.New("project not found")
 }
 
 func convertIssues(ris []redmine.Issue) []issue {
 	log.Print("convertIssues")
 	var is []issue
 	for _, ri := range ris {
+		// workaround(1)
+		if ri.Project.Id != targetProject.Id {
+			continue
+		}
+
 		due, _ := time.Parse("2006-01-02", ri.DueDate)
 		is = append(is, issue{
 			ID:         ri.Id,
@@ -216,7 +234,7 @@ func postToSlack(opts options, expiredCh, nearCh <-chan issue) error {
 		ec++
 		fmt.Fprintf(&buf, "- %s <%s/issues/%d|#%d>: %s(%s)\n", unassignable(formatTime(is.DueDate), "期日"), opts.Redmine.Endpoint, is.ID, is.ID, is.Subject, unassignable(getUser(opts, is.AssignedTo), "担当"))
 	}
-	fmt.Fprintf(&out, "期限切れのチケットは *%d件* です\n", ec)
+	fmt.Fprintf(&out, "%s の期限切れのチケットは *%d件* です\n", targetProject.Name, ec)
 	buf.WriteTo(&out)
 	buf.Reset()
 	var nc int
@@ -224,7 +242,7 @@ func postToSlack(opts options, expiredCh, nearCh <-chan issue) error {
 		nc++
 		fmt.Fprintf(&buf, "- %s <%s/issues/%d|#%d>: %s(%s)\n", unassignable(formatTime(is.DueDate), "期日"), opts.Redmine.Endpoint, is.ID, is.ID, is.Subject, unassignable(getUser(opts, is.AssignedTo), "担当"))
 	}
-	fmt.Fprintf(&out, "期限切れが近いチケットは *%d件* です\n", nc)
+	fmt.Fprintf(&out, "%s の期限切れが近いチケットは *%d件* です\n", targetProject.Name, nc)
 	buf.WriteTo(&out)
 	log.Print("post to slack")
 	if _, err := cli.Chat().PostMessage(opts.Slack.Channel).LinkNames(true).Text(out.String()).Do(context.Background()); err != nil {
@@ -246,6 +264,7 @@ func getUser(opts options, idname *redmine.IdName) string {
 	}
 	redmineUser, err := redmineUsers.Get(idname.Id)
 	if err != nil {
+		log.Printf("%s / %s not found", idname.Id, idname.Name)
 		return idname.Name
 	}
 	for _, slackUser := range slackUsers {
@@ -253,7 +272,6 @@ func getUser(opts options, idname *redmine.IdName) string {
 			return "<@" + slackUser.ID + ">"
 		}
 	}
-
 	return idname.Name
 }
 
