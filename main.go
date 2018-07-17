@@ -31,9 +31,10 @@ type options struct {
 }
 
 type redmineOptions struct {
-	APIKey   string `short:"k" long:"redmine-apikey" env:"REDMINE_APIKEY" required:"true" description:"APIKey for your Redmine"`
-	Endpoint string `short:"r" long:"redmine-endpoint" env:"REDMINE_ENDPOINT" requireid:"true" description:"Endpoint URL of your Redmine"`
-	Project  string `short:"p" long:"redmine-project" env:"REDMINE_PROJECT" required:"true" description:"Target project of Redmine"`
+	APIKey         string `short:"k" long:"redmine-apikey" env:"REDMINE_APIKEY" required:"true" description:"APIKey for your Redmine"`
+	Endpoint       string `short:"r" long:"redmine-endpoint" env:"REDMINE_ENDPOINT" requireid:"true" description:"Endpoint URL of your Redmine"`
+	Project        string `short:"p" long:"redmine-project" env:"REDMINE_PROJECT" required:"true" description:"Target project of Redmine"`
+	FinishedStatus []int  `short:"f" long:"redmine-finished-status" description:"IDs of status considered as finished"`
 }
 
 type slackOptions struct {
@@ -178,7 +179,7 @@ func getIssues(opts redmineOptions) ([]issue, error) {
 	}
 
 	log.Printf("issues: %d", len(res))
-	return convertIssues(res), nil
+	return convertIssues(res, opts), nil
 }
 
 func getProject(target string) (redmine.Project, error) {
@@ -194,12 +195,16 @@ func getProject(target string) (redmine.Project, error) {
 	return redmine.Project{}, errors.New("project not found")
 }
 
-func convertIssues(ris []redmine.Issue) []issue {
+func convertIssues(ris []redmine.Issue, opts redmineOptions) []issue {
 	log.Print("convertIssues")
 	var is []issue
 	for _, ri := range ris {
 		// workaround(1)
 		if ri.Project.Id != targetProject.Id {
+			continue
+		}
+
+		if in(ri.Status.Id, opts.FinishedStatus) {
 			continue
 		}
 
@@ -212,6 +217,15 @@ func convertIssues(ris []redmine.Issue) []issue {
 		})
 	}
 	return is
+}
+
+func in(t int, vs []int) bool {
+	for _, v := range vs {
+		if t == v {
+			return true
+		}
+	}
+	return false
 }
 
 func isExpired(is issue) bool {
